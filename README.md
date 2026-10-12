@@ -173,6 +173,18 @@ found, a malformed-rules input that must throw, a sparse Postgres result
 (a product missing one or more of its 300/310/400 rows), and routing
 check-order coming from the rules table rather than being hardcoded.
 
+**Live Postgres check — run 2026-10-12.** Against a fresh `stockdb`
+container: `stock` has 1,500 rows, `routing` has 4, and the two Postgres
+node queries (run verbatim from the workflow JSON) return results that,
+fed through the Code node, give the same next step as
+`sample/expected-output.xlsx` for all 11 rows of `sample/input.xlsx`.
+`expected-output.xlsx` was worked out independently from
+`db/data/stock-sheet.csv` (not by running the workflow's routing code).
+Note the sample only exercises two paths: its 10 real SKUs have no stock
+at any level, so all are "Cut, edge and drill", plus one deliberately
+unknown SKU for "SKU NOT FOUND". The other three outcomes are covered by
+the unit tests above, not by the sample file.
+
 ## Assumptions
 
 - **Attachment binary property**: Gmail Trigger exposes a single
