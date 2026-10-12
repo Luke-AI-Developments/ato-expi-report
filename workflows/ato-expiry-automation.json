@@ -102,70 +102,55 @@
     },
     {
       "parameters": {
-        "resource": "sheet",
-        "operation": "read",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $env.STOCK_SHEET_ID }}"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "Untitled"
-        },
-        "options": {}
+        "operation": "executeQuery",
+        "query": "SELECT sku, qty FROM stock WHERE substr(sku, 4) = $1 ORDER BY sku;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.sku).slice(3) ] }}"
+        }
       },
       "id": "a1b2c3d4-0005-4000-8000-000000000005",
       "name": "Look up stock",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
       "position": [
         -160,
         0
       ],
       "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "REPLACE_WITH_YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
-          "name": "Google Sheets account (ato-expiry)"
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Stock DB (local)"
         }
-      }
+      },
+      "notes": "Runs once per incoming SKU row (main input = 'Read xlsx attachment'). substr(sku, 4) strips the 3-digit prefix, matching on the 8-digit product body shared by a product's 300/310/400 codes. Returns 0-3 rows per SKU."
     },
     {
       "parameters": {
-        "resource": "sheet",
-        "operation": "read",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $env.STOCK_SHEET_ID }}"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "Routing"
-        },
+        "operation": "executeQuery",
+        "query": "SELECT prefix, stage, next_step, check_order FROM routing ORDER BY check_order;",
         "options": {}
       },
       "id": "a1b2c3d4-0006-4000-8000-000000000006",
       "name": "Read routing rules",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
       "position": [
         80,
         0
       ],
+      "executeOnce": true,
       "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "REPLACE_WITH_YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
-          "name": "Google Sheets account (ato-expiry)"
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Stock DB (local)"
         }
-      }
+      },
+      "notes": "executeOnce: true -- the routing table is small and fixed, so this runs once regardless of how many stock rows 'Look up stock' passes through."
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "function toQty(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// stockRows: [{ parent400Sku, parent400Desc, parent400Qty, parent310Sku, parent310Desc, parent310Qty, finishedSku, finishedDesc, finishedQty }, ...]\n// Builds a lookup where ANY of a product's three SKUs (300/310/400) maps\n// to the same { '300': qty, '310': qty, '400': qty } record, so a row can\n// be matched purely on its own 300 SKU and still see all three quantities.\nfunction buildStockIndex(stockRows) {\n  const index = new Map();\n  for (const r of stockRows || []) {\n    const record = {\n      '300': toQty(r.finishedQty),\n      '310': toQty(r.parent310Qty),\n      '400': toQty(r.parent400Qty),\n    };\n    for (const sku of [r.finishedSku, r.parent310Sku, r.parent400Sku]) {\n      if (sku !== undefined && sku !== null && String(sku).trim() !== '') {\n        index.set(String(sku).trim(), record);\n      }\n    }\n  }\n  return index;\n}\n\n// row: { sku, ... }\n// stockIndex: Map from buildStockIndex()\n// rules: [{ prefix, stage, nextStep, checkOrder }, ...] read from the\n//        'Routing' sheet tab -- nothing about prefix-to-step mapping or\n//        check order is hardcoded here, only the shape of a rule row.\nfunction decideNextStep(row, stockIndex, rules) {\n  if (!Array.isArray(rules) || rules.length === 0) {\n    throw new Error('Routing rules are missing or empty -- refusing to guess a next step.');\n  }\n\n  const sorted = [...rules].sort((a, b) => Number(a.checkOrder) - Number(b.checkOrder));\n\n  for (const rule of sorted) {\n    if (!rule || typeof rule.prefix !== 'string' || typeof rule.nextStep !== 'string') {\n      throw new Error('A routing rule is missing \"prefix\" or \"nextStep\" -- refusing to guess a next step.');\n    }\n  }\n\n  const fallback = sorted.find((r) => r.prefix === 'none');\n  if (!fallback) {\n    throw new Error('Routing rules have no \"none\" fallback row -- refusing to guess a next step.');\n  }\n\n  const record = stockIndex.get(String(row.sku).trim());\n  if (!record) {\n    return 'SKU NOT FOUND';\n  }\n\n  for (const rule of sorted) {\n    if (rule.prefix === 'none') continue;\n    const qty = record[rule.prefix];\n    if (typeof qty === 'number' && qty > 0) {\n      return rule.nextStep;\n    }\n  }\n\n  return fallback.nextStep;\n}\n\n/* ---- n8n glue below: not unit-tested here, see README ---- */\n\n// Pull each upstream node's full output directly by name, regardless of\n// what flows through this node's own main input -- this keeps the three\n// pure-function inputs (rows / stock rows / rules rows) decoupled from\n// the linear chain they happen to be wired through in the canvas.\nconst incomingRows = $('Read xlsx attachment').all().map((item) => item.json);\n\nconst stockRows = $('Look up stock').all().map((item) => {\n  const j = item.json;\n  return {\n    parent400Sku: j['400 sku'],\n    parent400Desc: j['400 description'],\n    parent400Qty: j['400 qty'],\n    parent310Sku: j['310 sku'],\n    parent310Desc: j['310 description'],\n    parent310Qty: j['310 qty'],\n    finishedSku: j['fg sku'],\n    finishedDesc: j['fg description'],\n    finishedQty: j['fg qty'],\n  };\n});\n\nconst rulesRows = $('Read routing rules').all().map((item) => {\n  const j = item.json;\n  return {\n    prefix: String(j['stock prefix']).trim(),\n    stage: j['stage'],\n    nextStep: j['next step'],\n    checkOrder: j['check order'],\n  };\n});\n\nconst stockIndex = buildStockIndex(stockRows);\n\nreturn incomingRows.map((row) => ({\n  json: {\n    ...row,\n    'next step': decideNextStep(row, stockIndex, rulesRows),\n  },\n}));\n"
+        "jsCode": "function toQty(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// pgStockRows: [{ sku, qty }, ...] -- one row per 300/310/400 code that\n// matched some incoming SKU's 8-digit body, from the 'Look up stock'\n// Postgres node (one parameterised query per incoming row, substr(sku, 4)\n// = the body). Builds a lookup keyed on the ORIGINAL 300 sku (since every\n// row in the attachment is a finished-good 300 code, and '300' + body is\n// always that same sku), mapping to a { '300': qty, '310': qty, '400': qty }\n// record so a row can see all three stock levels for its product.\nfunction buildStockIndex(pgStockRows) {\n  const index = new Map();\n  for (const r of pgStockRows || []) {\n    const sku = String(r.sku).trim();\n    if (sku.length < 4) continue;\n    const prefix = sku.slice(0, 3);\n    const body = sku.slice(3);\n    const key = `300${body}`;\n    if (!index.has(key)) {\n      index.set(key, {});\n    }\n    index.get(key)[prefix] = toQty(r.qty);\n  }\n  return index;\n}\n\n// row: { sku, ... }\n// stockIndex: Map from buildStockIndex()\n// rules: [{ prefix, stage, nextStep, checkOrder }, ...] read from the\n//        'routing' table -- nothing about prefix-to-step mapping or check\n//        order is hardcoded here, only the shape of a rule row.\nfunction decideNextStep(row, stockIndex, rules) {\n  if (!Array.isArray(rules) || rules.length === 0) {\n    throw new Error('Routing rules are missing or empty -- refusing to guess a next step.');\n  }\n\n  const sorted = [...rules].sort((a, b) => Number(a.checkOrder) - Number(b.checkOrder));\n\n  for (const rule of sorted) {\n    if (!rule || typeof rule.prefix !== 'string' || typeof rule.nextStep !== 'string') {\n      throw new Error('A routing rule is missing \"prefix\" or \"nextStep\" -- refusing to guess a next step.');\n    }\n  }\n\n  const fallback = sorted.find((r) => r.prefix === 'none');\n  if (!fallback) {\n    throw new Error('Routing rules have no \"none\" fallback row -- refusing to guess a next step.');\n  }\n\n  const record = stockIndex.get(String(row.sku).trim());\n  if (!record) {\n    return 'SKU NOT FOUND';\n  }\n\n  for (const rule of sorted) {\n    if (rule.prefix === 'none') continue;\n    const qty = record[rule.prefix];\n    if (typeof qty === 'number' && qty > 0) {\n      return rule.nextStep;\n    }\n  }\n\n  return fallback.nextStep;\n}\n\n/* ---- n8n glue below: not unit-tested here, see README ---- */\n\n// Pull each upstream node's full output directly by name, regardless of\n// what flows through this node's own main input -- this keeps the three\n// pure-function inputs (rows / stock rows / rules rows) decoupled from\n// the linear chain they happen to be wired through in the canvas.\nconst incomingRows = $('Read xlsx attachment').all().map((item) => item.json);\n\nconst stockRows = $('Look up stock').all().map((item) => ({\n  sku: item.json.sku,\n  qty: item.json.qty,\n}));\n\nconst rulesRows = $('Read routing rules').all().map((item) => {\n  const j = item.json;\n  return {\n    prefix: String(j.prefix).trim(),\n    stage: j.stage,\n    nextStep: j.next_step,\n    checkOrder: j.check_order,\n  };\n});\n\nconst stockIndex = buildStockIndex(stockRows);\n\nreturn incomingRows.map((row) => ({\n  json: {\n    ...row,\n    'next step': decideNextStep(row, stockIndex, rulesRows),\n  },\n}));\n"
       },
       "id": "a1b2c3d4-0007-4000-8000-000000000007",
       "name": "Decide next step",
@@ -228,7 +213,7 @@
     },
     {
       "parameters": {
-        "content": "## Replace this node with an SQL query node against the real stock database.",
+        "content": "## Swap the Postgres credential for the real stock database connection.",
         "height": 180,
         "width": 260,
         "color": 5

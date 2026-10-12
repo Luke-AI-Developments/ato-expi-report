@@ -1,0 +1,5 @@
+stock prefix,stage,next step,check order
+300,Finished,"Finished, no action",1
+310,"Edged, needs drilling",Drill,2
+400,Needs edging and drilling,Edge and drill,3
+none,No stock at any level,"Cut, edge and drill",4

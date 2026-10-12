@@ -59,57 +59,63 @@ const FG_SKU = `300${BODY}`;
 const DRILLED_SKU = `310${BODY}`;
 const RAW_SKU = `400${BODY}`;
 
-function sheetRows({ fgQty, drilledQty, rawQty }) {
-  // Mirrors the stock sheet's row shape: columns A-I, one row per product.
+function pgStockRows({ fgQty, drilledQty, rawQty }) {
+  // Mirrors what the "Look up stock" Postgres node returns for one SKU's
+  // query: flat { sku, qty } rows, one per 300/310/400 code sharing that
+  // product's 8-digit body (every product has all three rows seeded, qty
+  // possibly 0).
   return [
-    {
-      parent400Sku: RAW_SKU,
-      parent400Desc: 'Raw tiled panel 600x600',
-      parent400Qty: rawQty,
-      parent310Sku: DRILLED_SKU,
-      parent310Desc: 'Drilled blank 600x600',
-      parent310Qty: drilledQty,
-      finishedSku: FG_SKU,
-      finishedDesc: 'Finished tiled panel 600x600 Oak',
-      finishedQty: fgQty,
-    },
+    { sku: FG_SKU, qty: fgQty },
+    { sku: DRILLED_SKU, qty: drilledQty },
+    { sku: RAW_SKU, qty: rawQty },
   ];
 }
 
 test('outcome 1: finished-good stock > 0 -> "Finished, no action"', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 5, drilledQty: 0, rawQty: 0 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 5, drilledQty: 0, rawQty: 0 }));
   const result = decideNextStep({ sku: FG_SKU }, index, SAMPLE_RULES);
   assert.equal(result, 'Finished, no action');
 });
 
 test('outcome 2: no finished stock, drilled (310) stock > 0 -> "Drill"', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 0, drilledQty: 3, rawQty: 0 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 0, drilledQty: 3, rawQty: 0 }));
   const result = decideNextStep({ sku: FG_SKU }, index, SAMPLE_RULES);
   assert.equal(result, 'Drill');
 });
 
 test('outcome 3: no finished/drilled stock, raw (400) stock > 0 -> "Edge and drill"', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 0, drilledQty: 0, rawQty: 7 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 0, drilledQty: 0, rawQty: 7 }));
   const result = decideNextStep({ sku: FG_SKU }, index, SAMPLE_RULES);
   assert.equal(result, 'Edge and drill');
 });
 
 test('outcome 4: no stock anywhere -> "Cut, edge and drill"', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 0, drilledQty: 0, rawQty: 0 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 0, drilledQty: 0, rawQty: 0 }));
   const result = decideNextStep({ sku: FG_SKU }, index, SAMPLE_RULES);
   assert.equal(result, 'Cut, edge and drill');
 });
 
 test('outcome 5: sku not present in database -> "SKU NOT FOUND"', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 10, drilledQty: 10, rawQty: 10 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 10, drilledQty: 10, rawQty: 10 }));
   const result = decideNextStep({ sku: '30099999999' }, index, SAMPLE_RULES);
   assert.equal(result, 'SKU NOT FOUND');
 });
 
 test('lookup failure: malformed/empty rules throws rather than guessing', () => {
-  const index = buildStockIndex(sheetRows({ fgQty: 5, drilledQty: 0, rawQty: 0 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 5, drilledQty: 0, rawQty: 0 }));
   assert.throws(() => decideNextStep({ sku: FG_SKU }, index, []));
   assert.throws(() => decideNextStep({ sku: FG_SKU }, index, null));
+});
+
+test('sparse Postgres result (missing prefix rows) is treated as out of stock there', () => {
+  // A real query only returns rows that exist in `stock`; this fixture
+  // omits the 400 row entirely rather than sending qty: 0 for it.
+  const index = buildStockIndex([
+    { sku: FG_SKU, qty: 0 },
+    { sku: DRILLED_SKU, qty: 0 },
+  ]);
+  const result = decideNextStep({ sku: FG_SKU }, index, SAMPLE_RULES);
+  assert.equal(result, 'Cut, edge and drill');
 });
 
 test('check order from the rules sheet is honoured even when reordered', () => {
@@ -121,7 +127,7 @@ test('check order from the rules sheet is honoured even when reordered', () => {
     { prefix: '310', stage: 'Drilled blank', nextStep: 'Drill', checkOrder: 3 },
     { prefix: 'none', stage: '', nextStep: 'Cut, edge and drill', checkOrder: 4 },
   ];
-  const index = buildStockIndex(sheetRows({ fgQty: 0, drilledQty: 4, rawQty: 9 }));
+  const index = buildStockIndex(pgStockRows({ fgQty: 0, drilledQty: 4, rawQty: 9 }));
   const result = decideNextStep({ sku: FG_SKU }, index, reordered);
   assert.equal(result, 'Edge and drill');
 });
