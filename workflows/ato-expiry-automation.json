@@ -1,0 +1,341 @@
+{
+  "name": "ato-expiry-automation",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "subject:\"ato expi\" has:attachment",
+          "includeSpamTrash": false
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "ATO Expiry Email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1120,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account (ato-expiry)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.subject }}",
+              "rightValue": "ato expi",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Subject really matches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -880,
+        0
+      ],
+      "notes": "Defensive re-check: Gmail's search query (`q`) is fuzzy/stemmed, not a true regex, so we re-test the real subject with /ato expi/i before doing any work."
+    },
+    {
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "value": "={{ $json.headers?.['message-id'] ?? $json.id }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Already processed? (Message-ID)",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        0
+      ],
+      "notes": "Idempotency key = the email's RFC Message-ID header (falls back to the Gmail message id if the header is ever missing). Uses n8n's own dedupe store so the same email is never processed twice, even on retriggers."
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Read xlsx attachment",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        0
+      ],
+      "notes": "Assumes a single .xlsx attachment, which Gmail Trigger exposes as binary property 'attachment_0' (its standard naming for the first attachment on an item)."
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.STOCK_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Untitled"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Look up stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -160,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account (ato-expiry)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.STOCK_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Routing"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Read routing rules",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        80,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account (ato-expiry)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function toQty(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// stockRows: [{ parent400Sku, parent400Desc, parent400Qty, parent310Sku, parent310Desc, parent310Qty, finishedSku, finishedDesc, finishedQty }, ...]\n// Builds a lookup where ANY of a product's three SKUs (300/310/400) maps\n// to the same { '300': qty, '310': qty, '400': qty } record, so a row can\n// be matched purely on its own 300 SKU and still see all three quantities.\nfunction buildStockIndex(stockRows) {\n  const index = new Map();\n  for (const r of stockRows || []) {\n    const record = {\n      '300': toQty(r.finishedQty),\n      '310': toQty(r.parent310Qty),\n      '400': toQty(r.parent400Qty),\n    };\n    for (const sku of [r.finishedSku, r.parent310Sku, r.parent400Sku]) {\n      if (sku !== undefined && sku !== null && String(sku).trim() !== '') {\n        index.set(String(sku).trim(), record);\n      }\n    }\n  }\n  return index;\n}\n\n// row: { sku, ... }\n// stockIndex: Map from buildStockIndex()\n// rules: [{ prefix, stage, nextStep, checkOrder }, ...] read from the\n//        'Routing' sheet tab -- nothing about prefix-to-step mapping or\n//        check order is hardcoded here, only the shape of a rule row.\nfunction decideNextStep(row, stockIndex, rules) {\n  if (!Array.isArray(rules) || rules.length === 0) {\n    throw new Error('Routing rules are missing or empty -- refusing to guess a next step.');\n  }\n\n  const sorted = [...rules].sort((a, b) => Number(a.checkOrder) - Number(b.checkOrder));\n\n  for (const rule of sorted) {\n    if (!rule || typeof rule.prefix !== 'string' || typeof rule.nextStep !== 'string') {\n      throw new Error('A routing rule is missing \"prefix\" or \"nextStep\" -- refusing to guess a next step.');\n    }\n  }\n\n  const fallback = sorted.find((r) => r.prefix === 'none');\n  if (!fallback) {\n    throw new Error('Routing rules have no \"none\" fallback row -- refusing to guess a next step.');\n  }\n\n  const record = stockIndex.get(String(row.sku).trim());\n  if (!record) {\n    return 'SKU NOT FOUND';\n  }\n\n  for (const rule of sorted) {\n    if (rule.prefix === 'none') continue;\n    const qty = record[rule.prefix];\n    if (typeof qty === 'number' && qty > 0) {\n      return rule.nextStep;\n    }\n  }\n\n  return fallback.nextStep;\n}\n\n/* ---- n8n glue below: not unit-tested here, see README ---- */\n\n// Pull each upstream node's full output directly by name, regardless of\n// what flows through this node's own main input -- this keeps the three\n// pure-function inputs (rows / stock rows / rules rows) decoupled from\n// the linear chain they happen to be wired through in the canvas.\nconst incomingRows = $('Read xlsx attachment').all().map((item) => item.json);\n\nconst stockRows = $('Look up stock').all().map((item) => {\n  const j = item.json;\n  return {\n    parent400Sku: j['400 sku'],\n    parent400Desc: j['400 description'],\n    parent400Qty: j['400 qty'],\n    parent310Sku: j['310 sku'],\n    parent310Desc: j['310 description'],\n    parent310Qty: j['310 qty'],\n    finishedSku: j['fg sku'],\n    finishedDesc: j['fg description'],\n    finishedQty: j['fg qty'],\n  };\n});\n\nconst rulesRows = $('Read routing rules').all().map((item) => {\n  const j = item.json;\n  return {\n    prefix: String(j['stock prefix']).trim(),\n    stage: j['stage'],\n    nextStep: j['next step'],\n    checkOrder: j['check order'],\n  };\n});\n\nconst stockIndex = buildStockIndex(stockRows);\n\nreturn incomingRows.map((row) => ({\n  json: {\n    ...row,\n    'next step': decideNextStep(row, stockIndex, rulesRows),\n  },\n}));\n"
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Decide next step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        0
+      ],
+      "notes": "The one required Code node. Pure decideNextStep()/buildStockIndex() logic is above the GLUE marker and is unit-tested directly from this file by tests/routing.test.js. Throws (does not guess) if the Routing-rules read failed or came back malformed; a SKU simply absent from the stock sheet instead returns the row-level 'SKU NOT FOUND' and processing continues."
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "fileName": "ato-expiry-results.xlsx",
+          "sheetName": "Results",
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Build xlsx",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "reply",
+        "messageId": "={{ $('ATO Expiry Email').item.json.id }}",
+        "message": "Updated ATO expiry routing attached. This is an automated reply from the ato-expiry-automation workflow (demo data only).",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "data"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Reply with results",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        800,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account (ato-expiry)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Replace this node with an SQL query node against the real stock database.",
+        "height": 180,
+        "width": 260,
+        "color": 5
+      },
+      "id": "a1b2c3d4-000a-4000-8000-00000000000a",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        -260
+      ]
+    }
+  ],
+  "connections": {
+    "ATO Expiry Email": {
+      "main": [
+        [
+          {
+            "node": "Subject really matches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subject really matches?": {
+      "main": [
+        [
+          {
+            "node": "Already processed? (Message-ID)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Already processed? (Message-ID)": {
+      "main": [
+        [
+          {
+            "node": "Read xlsx attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read xlsx attachment": {
+      "main": [
+        [
+          {
+            "node": "Look up stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up stock": {
+      "main": [
+        [
+          {
+            "node": "Read routing rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read routing rules": {
+      "main": [
+        [
+          {
+            "node": "Decide next step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide next step": {
+      "main": [
+        [
+          {
+            "node": "Build xlsx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build xlsx": {
+      "main": [
+        [
+          {
+            "node": "Reply with results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "REPLACE_WITH_ERROR_HANDLER_WORKFLOW_ID"
+  }
+}

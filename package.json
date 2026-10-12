@@ -1,0 +1,9 @@
+{
+  "name": "ato-expiry-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portfolio n8n workflow: routes ATO (about-to-obsolete) finished-good stock emails to the correct manufacturing next step. Fake data only, no real systems.",
+  "scripts": {
+    "test": "node --test tests/routing.test.js"
+  }
+}

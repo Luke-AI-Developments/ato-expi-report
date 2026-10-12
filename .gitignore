@@ -1,0 +1,16 @@
+# secrets / local config
+.env
+.env.local
+
+# dependencies (only relevant if you later add devDependencies)
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# scratch output from manually running the workflow against sample/input.xlsx
+/tmp-output/

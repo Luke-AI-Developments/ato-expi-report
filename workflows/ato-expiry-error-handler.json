@@ -1,0 +1,57 @@
+{
+  "name": "ato-expiry-error-handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        0
+      ],
+      "notes": "Set as the 'Error Workflow' (Settings -> Error Workflow) on ato-expiry-automation, so any failed execution there lands here automatically."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $env.ALERT_EMAIL_TO }}",
+        "subject": "=ato-expiry-automation failed: {{ $json.workflow.name }}",
+        "message": "=The ato-expiry-automation workflow failed and did not finish processing an email.\n\nWorkflow: {{ $json.workflow.name }}\nFailed node: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error?.message ?? 'see execution log' }}\nExecution URL: {{ $json.execution.url }}\n\nNo \"next step\" was guessed for any row in this run -- re-run the source email once the underlying issue (e.g. the stock sheet or Routing tab) is fixed.",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Send alert email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account (ato-expiry)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send alert email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
