@@ -119,7 +119,9 @@ that mapping and order both come from the `routing` table.
    fake/real ID ships in the export).
 7. **Try it**: send yourself an email with a subject containing "ato
    expi" (any case) and `sample/input.xlsx` attached. Compare the reply
-   against `sample/expected-output.xlsx`.
+   against `sample/expected-output.xlsx`. For a smaller run that hits all
+   five outcomes, use `sample/input-mixed.xlsx` /
+   `sample/expected-output-mixed.xlsx` instead.
 
 ## Database
 
@@ -173,17 +175,32 @@ found, a malformed-rules input that must throw, a sparse Postgres result
 (a product missing one or more of its 300/310/400 rows), and routing
 check-order coming from the rules table rather than being hardcoded.
 
-**Live Postgres check — run 2026-10-12.** Against a fresh `stockdb`
-container: `stock` has 1,500 rows, `routing` has 4, and the two Postgres
-node queries (run verbatim from the workflow JSON) return results that,
-fed through the Code node, give the same next step as
-`sample/expected-output.xlsx` for all 11 rows of `sample/input.xlsx`.
-`expected-output.xlsx` was worked out independently from
-`db/data/stock-sheet.csv` (not by running the workflow's routing code).
-Note the sample only exercises two paths: its 10 real SKUs have no stock
-at any level, so all are "Cut, edge and drill", plus one deliberately
-unknown SKU for "SKU NOT FOUND". The other three outcomes are covered by
-the unit tests above, not by the sample file.
+**Sample sets.** Both expected-output files are worked out independently
+from `db/data/stock-sheet.csv` by `scripts/independent_check.py` (a
+hand-written copy of the rule, *not* the workflow's routing code); run it
+without `--write` to re-check a pair:
+
+```
+python scripts/independent_check.py sample/input.xlsx sample/expected-output.xlsx
+```
+
+| Set | Rows | Finished, no action | Drill | Edge and drill | Cut, edge and drill | SKU NOT FOUND |
+|---|---|---|---|---|---|---|
+| `input.xlsx` — the 10 "tiled panels needed today" SKUs + 1 unknown | 11 | 0 | 3 | 3 | 4 | 1 |
+| `input-mixed.xlsx` — one row per outcome | 5 | 1 | 1 | 1 | 1 | 1 |
+
+The mixed set is 30010482731 (the stock sheet's first product, finished
+stock on hand; its report qty of 25 is made up), 30040995108,
+30026196225 and 30061891516 from the tiled set, and the unknown
+30099999999.
+
+**Live Postgres check — run 2026-10-16.** Against a fresh `stockdb`
+container (`down -v` then `up -d`): `stock` has 1,500 rows, `routing` has
+4. The two Postgres node queries, run verbatim from the workflow JSON
+with the SKU body bound as `$1`, return results that, fed through the
+Code node's `buildStockIndex()` / `decideNextStep()`, give the same next
+step as the expected-output file for all 11 rows of `input.xlsx` and
+all 5 rows of `input-mixed.xlsx`. `npm test`: 8/8 pass.
 
 ## Assumptions
 
