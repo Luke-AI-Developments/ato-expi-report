@@ -121,10 +121,13 @@ that mapping and order both come from the `routing` table.
    would be wrong on everyone else's. The error handler's Gmail node also
    needs your Gmail credential before it can send anything.
 7. **Try it**: send yourself an email with a subject containing "ato
-   expi" (any case) and `sample/input.xlsx` attached. Compare the reply
+   expi" (any case) and `sample/input.xlsx` attached, then either click
+   **Execute workflow** (fetches the newest matching email) or activate
+   the workflow (polls every minute). Compare the reply's attachment
    against `sample/expected-output.xlsx`. For a smaller run that hits all
    five outcomes, use `sample/input-mixed.xlsx` /
-   `sample/expected-output-mixed.xlsx` instead.
+   `sample/expected-output-mixed.xlsx` instead. To check a run without
+   reading the reply, use the live test workflow under Testing.
 
 ## Database
 
@@ -205,56 +208,62 @@ Code node's `buildStockIndex()` / `decideNextStep()`, give the same next
 step as the expected-output file for all 11 rows of `input.xlsx` and
 all 5 rows of `input-mixed.xlsx`. `npm test`: 8/8 pass.
 
-### Test workflow (no Gmail)
+### Live test workflow
 
-`workflows/ato-expiry-automation.test.json` runs the real pipeline end to
-end inside n8n without an email account:
+`workflows/ato-expiry-automation.test.json` is the production pipeline
+with the email reply swapped for a file on disk, so a run can be checked
+without reading the reply:
 
 ```
-Manual Trigger -> Read input file -> Read xlsx attachment -> Look up stock
-  -> Read routing rules -> Decide next step -> Build xlsx -> Write result file
+Gmail Trigger -> Subject really matches? -> Already processed? (Message-ID)
+  -> Read xlsx attachment -> Look up stock -> Read routing rules
+  -> Decide next step -> Build xlsx -> Write result file
 ```
 
-The five middle nodes are exact copies of the production workflow's
-nodes. "Read input file" puts `sample/input.xlsx` on the `attachment_0`
-binary property (where the Gmail trigger puts the real attachment), and
-"Write result file" writes `test-output/<input name>-result.xlsx` instead
-of replying. `test-output/` is git-ignored.
+Every node except the last is configured like production: the trigger
+uses the same query (`subject:"ato expi" has:attachment`), `simple: false`
+and **Download Attachments** on, so the attachment arrives on the
+`attachment_0` binary property that "Read xlsx attachment" reads. Build
+xlsx puts the result on binary `data`, which production's Reply node
+attaches and the test's "Write result file" writes to
+`C:/Users/luket/.n8n-files/ato-expiry-automation/<attachment name>-result.xlsx`.
 
-To run it:
+That folder is used because n8n 2.x only lets file nodes write inside
+`~/.n8n-files` by default (`N8N_RESTRICT_FILE_ACCESS_TO`), and the write
+node does not create folders, so it must exist first. On another
+machine, change the path in "Write result file" to your own
+`~/.n8n-files` folder written out in full (`~` is not expanded in a file
+name).
 
-1. Import `workflows/ato-expiry-automation.test.json` and point both
-   Postgres nodes at the "Stock DB (local)" credential (Setup step 4).
-2. n8n 2.x only lets file nodes touch `~/.n8n-files` by default, so allow
-   the two repo folders for the run. From the repo root, using the ID
-   n8n gave the imported test workflow:
+To run the live test:
+
+1. Import `workflows/ato-expiry-automation.test.json`, attach your Gmail
+   credential to "Gmail Trigger" and "Stock DB (local)" to both Postgres
+   nodes (Setup step 4), and create the output folder.
+2. Email yourself with a subject containing **ato expi** (any case) and
+   `sample/input.xlsx` as the only attachment.
+3. Either click **Execute workflow** in the editor (the trigger fetches
+   the newest matching email) or activate the workflow and wait for the
+   next poll (every minute).
+4. Check the result independently:
 
    ```
-   mkdir test-output
-   N8N_RESTRICT_FILE_ACCESS_TO="<repo>\sample;<repo>\test-output" \
-   N8N_RUNNERS_BROKER_PORT=5680 \
-   n8n execute --id=<test workflow id>
+   python scripts/independent_check.py sample/input.xlsx "C:/Users/luket/.n8n-files/ato-expiry-automation/input-result.xlsx"
    ```
 
-   `N8N_RUNNERS_BROKER_PORT` is only needed when an n8n server is already
-   running (it holds the default task-broker port 5679). Relative paths
-   resolve against the directory `n8n` was started from, so run it from
-   the repo root. To run it from the editor instead, start the n8n server
-   itself from the repo root with the same `N8N_RESTRICT_FILE_ACCESS_TO`.
-3. Check the output independently:
+   It should print `ALL MATCH` against the same rows as
+   `sample/expected-output.xlsx`. For all five outcomes in 5 rows, attach
+   `sample/input-mixed.xlsx` instead and check
+   `input-mixed-result.xlsx` against `sample/input-mixed.xlsx`.
 
-   ```
-   python scripts/independent_check.py sample/input.xlsx test-output/input-result.xlsx
-   ```
+The Message-ID dedupe is live in the test too: each email is processed
+once, so a second run on the same email outputs nothing. Send a fresh
+email for every run.
 
-For the mixed set, change "Read input file"'s path to
-`sample/input-mixed.xlsx`, run again, and check with
-`python scripts/independent_check.py sample/input-mixed.xlsx test-output/input-mixed-result.xlsx`.
-
-**n8n run — 2026-10-17** (n8n 2.27.4, `n8n execute`): both outputs match
-on every row and column (sku, description, qty, next step), checked
-with `independent_check.py` and cell by cell against
-`expected-output.xlsx` / `expected-output-mixed.xlsx`: 11/11 and 5/5.
+**Earlier disk-input run — 2026-10-17** (n8n 2.27.4, `n8n execute`, before
+the trigger was switched to Gmail): with the samples fed in from disk,
+the same middle nodes produced output matching `expected-output.xlsx`
+(11/11) and `expected-output-mixed.xlsx` (5/5) on every column.
 
 ## Assumptions
 

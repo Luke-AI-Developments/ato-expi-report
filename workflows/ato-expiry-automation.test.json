@@ -2,35 +2,6 @@
   "name": "ato-expiry-automation (test, no Gmail)",
   "nodes": [
     {
-      "parameters": {},
-      "id": "c1b2c3d4-0001-4000-8000-000000000001",
-      "name": "Manual Trigger",
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [
-        -720,
-        0
-      ]
-    },
-    {
-      "parameters": {
-        "operation": "read",
-        "fileSelector": "sample/input.xlsx",
-        "options": {
-          "dataPropertyName": "attachment_0"
-        }
-      },
-      "id": "c1b2c3d4-0002-4000-8000-000000000002",
-      "name": "Read input file",
-      "type": "n8n-nodes-base.readWriteFile",
-      "typeVersion": 1.1,
-      "position": [
-        -480,
-        0
-      ],
-      "notes": "Stands in for the Gmail trigger: puts the sample file on binary property attachment_0, the same place the real trigger puts the email attachment."
-    },
-    {
       "parameters": {
         "operation": "xlsx",
         "binaryPropertyName": "attachment_0",
@@ -95,7 +66,6 @@
     },
     {
       "parameters": {
-        "mode": "runOnceForAllItems",
         "jsCode": "function toQty(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// pgStockRows: [{ sku, qty }, ...] -- one row per 300/310/400 code that\n// matched some incoming SKU's 8-digit body, from the 'Look up stock'\n// Postgres node (one parameterised query per incoming row, substr(sku, 4)\n// = the body). Builds a lookup keyed on the ORIGINAL 300 sku (since every\n// row in the attachment is a finished-good 300 code, and '300' + body is\n// always that same sku), mapping to a { '300': qty, '310': qty, '400': qty }\n// record so a row can see all three stock levels for its product.\nfunction buildStockIndex(pgStockRows) {\n  const index = new Map();\n  for (const r of pgStockRows || []) {\n    const sku = String(r.sku).trim();\n    if (sku.length < 4) continue;\n    const prefix = sku.slice(0, 3);\n    const body = sku.slice(3);\n    const key = `300${body}`;\n    if (!index.has(key)) {\n      index.set(key, {});\n    }\n    index.get(key)[prefix] = toQty(r.qty);\n  }\n  return index;\n}\n\n// row: { sku, ... }\n// stockIndex: Map from buildStockIndex()\n// rules: [{ prefix, stage, nextStep, checkOrder }, ...] read from the\n//        'routing' table -- nothing about prefix-to-step mapping or check\n//        order is hardcoded here, only the shape of a rule row.\nfunction decideNextStep(row, stockIndex, rules) {\n  if (!Array.isArray(rules) || rules.length === 0) {\n    throw new Error('Routing rules are missing or empty -- refusing to guess a next step.');\n  }\n\n  const sorted = [...rules].sort((a, b) => Number(a.checkOrder) - Number(b.checkOrder));\n\n  for (const rule of sorted) {\n    if (!rule || typeof rule.prefix !== 'string' || typeof rule.nextStep !== 'string') {\n      throw new Error('A routing rule is missing \"prefix\" or \"nextStep\" -- refusing to guess a next step.');\n    }\n  }\n\n  const fallback = sorted.find((r) => r.prefix === 'none');\n  if (!fallback) {\n    throw new Error('Routing rules have no \"none\" fallback row -- refusing to guess a next step.');\n  }\n\n  const record = stockIndex.get(String(row.sku).trim());\n  if (!record) {\n    return 'SKU NOT FOUND';\n  }\n\n  for (const rule of sorted) {\n    if (rule.prefix === 'none') continue;\n    const qty = record[rule.prefix];\n    if (typeof qty === 'number' && qty > 0) {\n      return rule.nextStep;\n    }\n  }\n\n  return fallback.nextStep;\n}\n\n/* ---- n8n glue below: not unit-tested here, see README ---- */\n\n// Pull each upstream node's full output directly by name, regardless of\n// what flows through this node's own main input -- this keeps the three\n// pure-function inputs (rows / stock rows / rules rows) decoupled from\n// the linear chain they happen to be wired through in the canvas.\nconst incomingRows = $('Read xlsx attachment').all().map((item) => item.json);\n\nconst stockRows = $('Look up stock').all().map((item) => ({\n  sku: item.json.sku,\n  qty: item.json.qty,\n}));\n\nconst rulesRows = $('Read routing rules').all().map((item) => {\n  const j = item.json;\n  return {\n    prefix: String(j.prefix).trim(),\n    stage: j.stage,\n    nextStep: j.next_step,\n    checkOrder: j.check_order,\n  };\n});\n\nconst stockIndex = buildStockIndex(stockRows);\n\nreturn incomingRows.map((row) => ({\n  json: {\n    ...row,\n    'next step': decideNextStep(row, stockIndex, rulesRows),\n  },\n}));\n"
       },
       "id": "a1b2c3d4-0007-4000-8000-000000000007",
@@ -113,8 +83,7 @@
         "operation": "xlsx",
         "options": {
           "fileName": "ato-expiry-results.xlsx",
-          "sheetName": "Results",
-          "binaryPropertyName": "data"
+          "sheetName": "Results"
         }
       },
       "id": "a1b2c3d4-0008-4000-8000-000000000008",
@@ -129,8 +98,7 @@
     {
       "parameters": {
         "operation": "write",
-        "fileName": "=test-output/{{ $('Read input file').first().binary.attachment_0.fileName.replace(/\\.xlsx$/, '') }}-result.xlsx",
-        "dataPropertyName": "data",
+        "fileName": "=C:/Users/luket/.n8n-files/ato-expiry-automation/{{ $('Gmail Trigger').first().binary.attachment_0.fileName.replace(/\\.xlsx$/, '') }}-result.xlsx",
         "options": {}
       },
       "id": "c1b2c3d4-0003-4000-8000-000000000003",
@@ -142,31 +110,97 @@
         0
       ],
       "notes": "Stands in for the Gmail reply: writes the built xlsx to test-output/<input name>-result.xlsx."
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "includeSpamTrash": false,
+          "q": "subject:\"ato expi\" has:attachment"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -960,
+        0
+      ],
+      "id": "ef0a50cb-5955-4ed0-9fe1-7103ce10983b",
+      "name": "Gmail Trigger",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.subject }}",
+              "rightValue": "ato expi",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba5c3a25-3915-48ea-9b3e-33b9d0a63e55",
+      "name": "Subject really matches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -720,
+        0
+      ],
+      "notes": "Defensive re-check: Gmail's search query (`q`) is fuzzy/stemmed, not a true regex, so we re-test the real subject with /ato expi/i before doing any work."
+    },
+    {
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "options": {},
+        "logic": "removeItemsWithAlreadySeenKeyValues",
+        "dedupeValue": "={{ $json.headers?.['message-id'] ?? $json.id }}"
+      },
+      "id": "8c339c80-1380-4b16-900f-1914006c4677",
+      "name": "Already processed? (Message-ID)",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        0
+      ],
+      "notes": "Idempotency key = the email's RFC Message-ID header (falls back to the Gmail message id if the header is ever missing). Uses n8n's own dedupe store so the same email is never processed twice, even on retriggers."
     }
   ],
   "connections": {
-    "Manual Trigger": {
-      "main": [
-        [
-          {
-            "node": "Read input file",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Read input file": {
-      "main": [
-        [
-          {
-            "node": "Read xlsx attachment",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Read xlsx attachment": {
       "main": [
         [
@@ -221,9 +255,44 @@
           }
         ]
       ]
+    },
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Subject really matches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subject really matches?": {
+      "main": [
+        [
+          {
+            "node": "Already processed? (Message-ID)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Already processed? (Message-ID)": {
+      "main": [
+        [
+          {
+            "node": "Read xlsx attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   }
 }
