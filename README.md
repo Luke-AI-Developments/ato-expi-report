@@ -116,7 +116,10 @@ that mapping and order both come from the `routing` table.
    `ato-expiry-error-handler` (this is set by workflow **ID**, which only
    exists once you've imported it — the placeholder
    `REPLACE_WITH_ERROR_HANDLER_WORKFLOW_ID` in the JSON is there so no
-   fake/real ID ships in the export).
+   fake/real ID ships in the export). The repo JSON deliberately keeps
+   that placeholder: workflow IDs are per n8n instance, so any real ID
+   would be wrong on everyone else's. The error handler's Gmail node also
+   needs your Gmail credential before it can send anything.
 7. **Try it**: send yourself an email with a subject containing "ato
    expi" (any case) and `sample/input.xlsx` attached. Compare the reply
    against `sample/expected-output.xlsx`. For a smaller run that hits all
@@ -201,6 +204,57 @@ with the SKU body bound as `$1`, return results that, fed through the
 Code node's `buildStockIndex()` / `decideNextStep()`, give the same next
 step as the expected-output file for all 11 rows of `input.xlsx` and
 all 5 rows of `input-mixed.xlsx`. `npm test`: 8/8 pass.
+
+### Test workflow (no Gmail)
+
+`workflows/ato-expiry-automation.test.json` runs the real pipeline end to
+end inside n8n without an email account:
+
+```
+Manual Trigger -> Read input file -> Read xlsx attachment -> Look up stock
+  -> Read routing rules -> Decide next step -> Build xlsx -> Write result file
+```
+
+The five middle nodes are exact copies of the production workflow's
+nodes. "Read input file" puts `sample/input.xlsx` on the `attachment_0`
+binary property (where the Gmail trigger puts the real attachment), and
+"Write result file" writes `test-output/<input name>-result.xlsx` instead
+of replying. `test-output/` is git-ignored.
+
+To run it:
+
+1. Import `workflows/ato-expiry-automation.test.json` and point both
+   Postgres nodes at the "Stock DB (local)" credential (Setup step 4).
+2. n8n 2.x only lets file nodes touch `~/.n8n-files` by default, so allow
+   the two repo folders for the run. From the repo root, using the ID
+   n8n gave the imported test workflow:
+
+   ```
+   mkdir test-output
+   N8N_RESTRICT_FILE_ACCESS_TO="<repo>\sample;<repo>\test-output" \
+   N8N_RUNNERS_BROKER_PORT=5680 \
+   n8n execute --id=<test workflow id>
+   ```
+
+   `N8N_RUNNERS_BROKER_PORT` is only needed when an n8n server is already
+   running (it holds the default task-broker port 5679). Relative paths
+   resolve against the directory `n8n` was started from, so run it from
+   the repo root. To run it from the editor instead, start the n8n server
+   itself from the repo root with the same `N8N_RESTRICT_FILE_ACCESS_TO`.
+3. Check the output independently:
+
+   ```
+   python scripts/independent_check.py sample/input.xlsx test-output/input-result.xlsx
+   ```
+
+For the mixed set, change "Read input file"'s path to
+`sample/input-mixed.xlsx`, run again, and check with
+`python scripts/independent_check.py sample/input-mixed.xlsx test-output/input-mixed-result.xlsx`.
+
+**n8n run — 2026-10-17** (n8n 2.27.4, `n8n execute`): both outputs match
+on every row and column (sku, description, qty, next step), checked
+with `independent_check.py` and cell by cell against
+`expected-output.xlsx` / `expected-output-mixed.xlsx`: 11/11 and 5/5.
 
 ## Assumptions
 

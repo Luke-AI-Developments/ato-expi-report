@@ -1,0 +1,229 @@
+{
+  "name": "ato-expiry-automation (test, no Gmail)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "c1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "sample/input.xlsx",
+        "options": {
+          "dataPropertyName": "attachment_0"
+        }
+      },
+      "id": "c1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Read input file",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -480,
+        0
+      ],
+      "notes": "Stands in for the Gmail trigger: puts the sample file on binary property attachment_0, the same place the real trigger puts the email attachment."
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Read xlsx attachment",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        0
+      ],
+      "notes": "Assumes a single .xlsx attachment, which Gmail Trigger exposes as binary property 'attachment_0' (its standard naming for the first attachment on an item)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT sku, qty FROM stock WHERE substr(sku, 4) = $1 ORDER BY sku;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.sku).slice(3) ] }}"
+        }
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Look up stock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Stock DB (local)"
+        }
+      },
+      "notes": "Runs once per incoming SKU row (main input = 'Read xlsx attachment'). substr(sku, 4) strips the 3-digit prefix, matching on the 8-digit product body shared by a product's 300/310/400 codes. Returns 0-3 rows per SKU."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT prefix, stage, next_step, check_order FROM routing ORDER BY check_order;",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Read routing rules",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Stock DB (local)"
+        }
+      },
+      "notes": "executeOnce: true -- the routing table is small and fixed, so this runs once regardless of how many stock rows 'Look up stock' passes through."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function toQty(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// pgStockRows: [{ sku, qty }, ...] -- one row per 300/310/400 code that\n// matched some incoming SKU's 8-digit body, from the 'Look up stock'\n// Postgres node (one parameterised query per incoming row, substr(sku, 4)\n// = the body). Builds a lookup keyed on the ORIGINAL 300 sku (since every\n// row in the attachment is a finished-good 300 code, and '300' + body is\n// always that same sku), mapping to a { '300': qty, '310': qty, '400': qty }\n// record so a row can see all three stock levels for its product.\nfunction buildStockIndex(pgStockRows) {\n  const index = new Map();\n  for (const r of pgStockRows || []) {\n    const sku = String(r.sku).trim();\n    if (sku.length < 4) continue;\n    const prefix = sku.slice(0, 3);\n    const body = sku.slice(3);\n    const key = `300${body}`;\n    if (!index.has(key)) {\n      index.set(key, {});\n    }\n    index.get(key)[prefix] = toQty(r.qty);\n  }\n  return index;\n}\n\n// row: { sku, ... }\n// stockIndex: Map from buildStockIndex()\n// rules: [{ prefix, stage, nextStep, checkOrder }, ...] read from the\n//        'routing' table -- nothing about prefix-to-step mapping or check\n//        order is hardcoded here, only the shape of a rule row.\nfunction decideNextStep(row, stockIndex, rules) {\n  if (!Array.isArray(rules) || rules.length === 0) {\n    throw new Error('Routing rules are missing or empty -- refusing to guess a next step.');\n  }\n\n  const sorted = [...rules].sort((a, b) => Number(a.checkOrder) - Number(b.checkOrder));\n\n  for (const rule of sorted) {\n    if (!rule || typeof rule.prefix !== 'string' || typeof rule.nextStep !== 'string') {\n      throw new Error('A routing rule is missing \"prefix\" or \"nextStep\" -- refusing to guess a next step.');\n    }\n  }\n\n  const fallback = sorted.find((r) => r.prefix === 'none');\n  if (!fallback) {\n    throw new Error('Routing rules have no \"none\" fallback row -- refusing to guess a next step.');\n  }\n\n  const record = stockIndex.get(String(row.sku).trim());\n  if (!record) {\n    return 'SKU NOT FOUND';\n  }\n\n  for (const rule of sorted) {\n    if (rule.prefix === 'none') continue;\n    const qty = record[rule.prefix];\n    if (typeof qty === 'number' && qty > 0) {\n      return rule.nextStep;\n    }\n  }\n\n  return fallback.nextStep;\n}\n\n/* ---- n8n glue below: not unit-tested here, see README ---- */\n\n// Pull each upstream node's full output directly by name, regardless of\n// what flows through this node's own main input -- this keeps the three\n// pure-function inputs (rows / stock rows / rules rows) decoupled from\n// the linear chain they happen to be wired through in the canvas.\nconst incomingRows = $('Read xlsx attachment').all().map((item) => item.json);\n\nconst stockRows = $('Look up stock').all().map((item) => ({\n  sku: item.json.sku,\n  qty: item.json.qty,\n}));\n\nconst rulesRows = $('Read routing rules').all().map((item) => {\n  const j = item.json;\n  return {\n    prefix: String(j.prefix).trim(),\n    stage: j.stage,\n    nextStep: j.next_step,\n    checkOrder: j.check_order,\n  };\n});\n\nconst stockIndex = buildStockIndex(stockRows);\n\nreturn incomingRows.map((row) => ({\n  json: {\n    ...row,\n    'next step': decideNextStep(row, stockIndex, rulesRows),\n  },\n}));\n"
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Decide next step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "notes": "The one required Code node. Pure decideNextStep()/buildStockIndex() logic is above the GLUE marker and is unit-tested directly from this file by tests/routing.test.js. Throws (does not guess) if the Routing-rules read failed or came back malformed; a SKU simply absent from the stock sheet instead returns the row-level 'SKU NOT FOUND' and processing continues."
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "fileName": "ato-expiry-results.xlsx",
+          "sheetName": "Results",
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Build xlsx",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=test-output/{{ $('Read input file').first().binary.attachment_0.fileName.replace(/\\.xlsx$/, '') }}-result.xlsx",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "c1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Write result file",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        0
+      ],
+      "notes": "Stands in for the Gmail reply: writes the built xlsx to test-output/<input name>-result.xlsx."
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read input file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read input file": {
+      "main": [
+        [
+          {
+            "node": "Read xlsx attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read xlsx attachment": {
+      "main": [
+        [
+          {
+            "node": "Look up stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up stock": {
+      "main": [
+        [
+          {
+            "node": "Read routing rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read routing rules": {
+      "main": [
+        [
+          {
+            "node": "Decide next step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide next step": {
+      "main": [
+        [
+          {
+            "node": "Build xlsx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build xlsx": {
+      "main": [
+        [
+          {
+            "node": "Write result file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

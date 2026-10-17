@@ -71,7 +71,8 @@
     {
       "parameters": {
         "operation": "removeItemsSeenInPreviousExecutions",
-        "value": "={{ $json.headers?.['message-id'] ?? $json.id }}",
+        "logic": "removeItemsWithAlreadySeenKeyValues",
+        "dedupeValue": "={{ $json.headers?.['message-id'] ?? $json.id }}",
         "options": {}
       },
       "id": "a1b2c3d4-0003-4000-8000-000000000003",

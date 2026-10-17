@@ -15,3 +15,6 @@ Thumbs.db
 # scratch output from manually running the workflow against sample/input.xlsx
 /tmp-output/
 .n8n-local/
+
+# output from the no-Gmail test workflow (workflows/ato-expiry-automation.test.json)
+/test-output/
