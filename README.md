@@ -13,14 +13,17 @@ discontinued. For each SKU, someone needs to know what manufacturing step
 to take next — and that depends on how far upstream the raw stock already
 exists:
 
-- Finished-good stock on hand? → nothing to do.
+- Enough finished-good stock to cover the qty asked for? → nothing to do;
+  the row is left out of the reply.
 - Only a drilled blank exists? → just drill the rest.
 - Only a raw panel exists? → edge and drill it.
 - Nothing exists at any stage? → start from a cut panel.
 
 This workflow reads the report, looks each SKU up against the "stock
 database", applies that rule, and emails the sender back a new
-spreadsheet with a `next step` column filled in.
+spreadsheet with an `actions` column filled in: the row's `qty` and its
+next step, e.g. `20 to Edge and drill`. Rows already covered by finished
+stock are dropped before it is sent.
 
 ## Flow
 
@@ -34,7 +37,7 @@ flowchart TD
     D --> E[Look up stock in Postgres: one parameterised query per SKU]
     E --> F[Read routing rules from Postgres: routing table]
     F --> G[Code: decideNextStep per row]
-    G --> H[Build new .xlsx with 'next step' column]
+    G --> H[Build new .xlsx with 'actions' column: qty to next step]
     H --> I[Reply to sender with attachment]
     G -. throws on bad rules .-> X[Error Workflow: alert email]
 ```
@@ -69,12 +72,23 @@ to change behaviour, not the workflow):
 | none | — | Cut, edge and drill | 4 |
 
 Rules are checked in `check order`; the first prefix with `stock > 0`
-wins. A SKU not present in the database at all gets `SKU NOT FOUND`
+wins, except the finished (300) level: it only counts when its stock is
+**at least the `qty` asked for in the email**. Such a row needs nothing
+doing, so it is **dropped from the reply**. If the email asks for more
+than the finished stock, the row stays and routes on the 310/400 stock as
+usual. A SKU not present in the database at all gets `SKU NOT FOUND`
 instead, and processing continues with the remaining rows.
+
+Each output row's `actions` cell is `<qty> to <next step>`, with the
+email's `qty` and the step text exactly as in the table:
+`58 to Edge and drill`, `1 to SKU NOT FOUND`. A blank `qty` leaves just
+the step. If every row is dropped, the Code node outputs no items, so
+n8n stops there and **no reply is sent** for that email.
 
 The decision logic lives in one place: the `jsCode` of the "Decide next
 step" node in `workflows/ato-expiry-automation.json`, as the pure
-functions `decideNextStep()` and `buildStockIndex()`. Nothing about which
+functions `decideNextStep()`, `buildStockIndex()`, `formatAction()` and
+`buildResultRows()`. Nothing about which
 prefix maps to which step, or which order to check them in, is hardcoded
 beyond the *shape* of a rule row (`prefix`, `nextStep`, `checkOrder`) —
 that mapping and order both come from the `routing` table.
@@ -124,8 +138,8 @@ that mapping and order both come from the `routing` table.
    expi" (any case) and `sample/input.xlsx` attached, then either click
    **Execute workflow** (fetches the newest matching email) or activate
    the workflow (polls every minute). Compare the reply's attachment
-   against `sample/expected-output.xlsx`. For a smaller run that hits all
-   five outcomes, use `sample/input-mixed.xlsx` /
+   against `sample/expected-output.xlsx`. For a smaller run that hits
+   every outcome, including dropped rows, use `sample/input-mixed.xlsx` /
    `sample/expected-output-mixed.xlsx` instead. To check a run without
    reading the reply, use the live test workflow under Testing.
 
@@ -179,7 +193,9 @@ Runs `tests/routing.test.js` under Node's built-in test runner (`node
 that could drift. Eight cases: the four routing outcomes, a SKU not
 found, a malformed-rules input that must throw, a sparse Postgres result
 (a product missing one or more of its 300/310/400 rows), and routing
-check-order coming from the rules table rather than being hardcoded.
+check-order coming from the rules table rather than being hardcoded. It
+also covers the `actions` cell format, finished stock below / equal to /
+above the qty asked for, and dropping covered rows from the result.
 
 **Sample sets.** Both expected-output files are worked out independently
 from `db/data/stock-sheet.csv` by `scripts/independent_check.py` (a
@@ -190,15 +206,24 @@ without `--write` to re-check a pair:
 python scripts/independent_check.py sample/input.xlsx sample/expected-output.xlsx
 ```
 
-| Set | Rows | Finished, no action | Drill | Edge and drill | Cut, edge and drill | SKU NOT FOUND |
+| Set | Rows in → out | Dropped (finished covers qty) | Drill | Edge and drill | Cut, edge and drill | SKU NOT FOUND |
 |---|---|---|---|---|---|---|
-| `input.xlsx` — the 10 "tiled panels needed today" SKUs + 1 unknown | 11 | 0 | 3 | 3 | 4 | 1 |
-| `input-mixed.xlsx` — one row per outcome | 5 | 1 | 1 | 1 | 1 | 1 |
+| `input.xlsx` — the 10 "tiled panels needed today" SKUs + 1 unknown | 11 → 11 | 0 | 3 | 3 | 4 | 1 |
+| `input-mixed.xlsx` — every outcome, plus the finished-stock edges | 7 → 5 | 2 | 1 | 2 | 1 | 1 |
 
-The mixed set is 30010482731 (the stock sheet's first product, finished
-stock on hand; its report qty of 25 is made up), 30040995108,
-30026196225 and 30061891516 from the tiled set, and the unknown
-30099999999.
+The mixed set is 30010482731 (the stock sheet's first product, 584
+finished on hand against a made-up report qty of 25: dropped),
+30040995108, 30026196225 and 30061891516 from the tiled set, the unknown
+30099999999, 30094410887 (42 finished against a made-up qty of 100: kept,
+routed on its 741 at 400 → `100 to Edge and drill`) and 30034643897
+(33 finished against a made-up qty of 33: covered exactly, dropped).
+
+**Live Postgres check — run 2026-10-17** (after the `actions` column and
+the drop rule). The whole "Decide next step" code, glue included, run
+against real results of the two Postgres queries, gives exactly the rows
+of `expected-output.xlsx` (11/11) and `expected-output-mixed.xlsx` (5/5,
+with the 2 covered rows dropped), in both workflow files. `npm test`:
+14/14 pass.
 
 **Live Postgres check — run 2026-10-16.** Against a fresh `stockdb`
 container (`down -v` then `up -d`): `stock` has 1,500 rows, `routing` has
@@ -255,8 +280,9 @@ To run the live test:
    ```
 
    It should print `ALL MATCH` against the same rows as
-   `sample/expected-output.xlsx`. For all five outcomes in 5 rows, attach
-   `sample/input-mixed.xlsx` instead and check
+   `sample/expected-output.xlsx`. For every outcome, including 2 dropped
+   rows (7 rows in, 5 out), attach `sample/input-mixed.xlsx` instead and
+   check
    `input-mixed-result.xlsx` against `sample/input-mixed.xlsx`.
 
 The Message-ID dedupe is live in the test too: each email is processed

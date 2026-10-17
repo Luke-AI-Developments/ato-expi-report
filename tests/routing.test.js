@@ -36,15 +36,17 @@ function loadDecideNextStep() {
   // just without the plumbing that only makes sense inside n8n itself.
   const pureLogic = jsCode.split(GLUE_MARKER)[0];
   const sandbox = { module: { exports: {} }, console };
-  const harness = `${pureLogic}\nmodule.exports = { decideNextStep, buildStockIndex };`;
+  const harness = `${pureLogic}\nmodule.exports = { decideNextStep, buildStockIndex, formatAction, buildResultRows };`;
   vm.runInNewContext(harness, sandbox, { filename: 'decideNextStep.sandbox.js' });
 
   assert.equal(typeof sandbox.module.exports.decideNextStep, 'function');
   assert.equal(typeof sandbox.module.exports.buildStockIndex, 'function');
+  assert.equal(typeof sandbox.module.exports.formatAction, 'function');
+  assert.equal(typeof sandbox.module.exports.buildResultRows, 'function');
   return sandbox.module.exports;
 }
 
-const { decideNextStep, buildStockIndex } = loadDecideNextStep();
+const { decideNextStep, buildStockIndex, formatAction, buildResultRows } = loadDecideNextStep();
 
 const SAMPLE_RULES = [
   { prefix: '300', stage: 'Finished good', nextStep: 'Finished, no action', checkOrder: 1 },
@@ -130,4 +132,62 @@ test('check order from the rules sheet is honoured even when reordered', () => {
   const index = buildStockIndex(pgStockRows({ fgQty: 0, drilledQty: 4, rawQty: 9 }));
   const result = decideNextStep({ sku: FG_SKU }, index, reordered);
   assert.equal(result, 'Edge and drill');
+});
+
+test('actions cell: "<qty> to <next step>" for every outcome, step text unchanged', () => {
+  assert.equal(formatAction(20, 'Edge and drill'), '20 to Edge and drill');
+  assert.equal(formatAction(25, 'Finished, no action'), '25 to Finished, no action');
+  assert.equal(formatAction(1, 'SKU NOT FOUND'), '1 to SKU NOT FOUND');
+  assert.equal(formatAction('7', 'Drill'), '7 to Drill');
+});
+
+test('actions cell: a blank qty leaves just the step', () => {
+  assert.equal(formatAction(undefined, 'Drill'), 'Drill');
+  assert.equal(formatAction(null, 'Drill'), 'Drill');
+  assert.equal(formatAction('  ', 'Drill'), 'Drill');
+  assert.equal(formatAction(0, 'Drill'), '0 to Drill');
+});
+test('finished stock below the qty asked for does not count: routes on the next level', () => {
+  const index = buildStockIndex(pgStockRows({ fgQty: 42, drilledQty: 0, rawQty: 741 }));
+  assert.equal(decideNextStep({ sku: FG_SKU, qty: 100 }, index, SAMPLE_RULES), 'Edge and drill');
+  const empty = buildStockIndex(pgStockRows({ fgQty: 42, drilledQty: 0, rawQty: 0 }));
+  assert.equal(decideNextStep({ sku: FG_SKU, qty: 100 }, empty, SAMPLE_RULES), 'Cut, edge and drill');
+});
+
+test('finished stock equal to or above the qty asked for -> "Finished, no action"', () => {
+  const index = buildStockIndex(pgStockRows({ fgQty: 42, drilledQty: 3, rawQty: 0 }));
+  assert.equal(decideNextStep({ sku: FG_SKU, qty: 42 }, index, SAMPLE_RULES), 'Finished, no action');
+  assert.equal(decideNextStep({ sku: FG_SKU, qty: 10 }, index, SAMPLE_RULES), 'Finished, no action');
+  assert.equal(decideNextStep({ sku: FG_SKU, qty: 43 }, index, SAMPLE_RULES), 'Drill');
+});
+
+// Objects built inside the vm sandbox have that realm's prototypes, which
+// deepStrictEqual rejects; compare plain JSON copies instead.
+const plain = (v) => JSON.parse(JSON.stringify(v));
+
+test('result rows: rows covered by finished stock are dropped, the rest keep order', () => {
+  const index = buildStockIndex([
+    { sku: '30011111111', qty: 50 }, // covers 20 -> dropped
+    { sku: '30022222222', qty: 30 }, // covers exactly 30 -> dropped
+    { sku: '30033333333', qty: 10 }, // short for 25 -> kept, 400 stock
+    { sku: '40033333333', qty: 9 },
+    { sku: '31044444444', qty: 4 }, // no finished stock -> kept, drill
+  ]);
+  const rows = [
+    { sku: '30011111111', description: 'a', qty: 20 },
+    { sku: '30033333333', description: 'c', qty: 25 },
+    { sku: '30022222222', description: 'b', qty: 30 },
+    { sku: '30044444444', description: 'd', qty: 7 },
+    { sku: '30099999999', description: 'e', qty: 1 },
+  ];
+  assert.deepEqual(plain(buildResultRows(rows, index, SAMPLE_RULES)), [
+    { sku: '30033333333', description: 'c', qty: 25, actions: '25 to Edge and drill' },
+    { sku: '30044444444', description: 'd', qty: 7, actions: '7 to Drill' },
+    { sku: '30099999999', description: 'e', qty: 1, actions: '1 to SKU NOT FOUND' },
+  ]);
+});
+
+test('result rows: every row covered -> empty result', () => {
+  const index = buildStockIndex([{ sku: FG_SKU, qty: 5 }]);
+  assert.deepEqual(plain(buildResultRows([{ sku: FG_SKU, qty: 5 }], index, SAMPLE_RULES)), []);
 });
