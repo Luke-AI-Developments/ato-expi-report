@@ -98,7 +98,7 @@
     {
       "parameters": {
         "operation": "write",
-        "fileName": "=C:/Users/luket/.n8n-files/ato-expiry-automation/{{ $('Gmail Trigger').first().binary.attachment_0.fileName.replace(/\\.xlsx$/, '') }}-result.xlsx",
+        "fileName": "=C:/Users/luket/.n8n-files/ato-expiry-automation/{{ $('Gmail Trigger').first().binary.attachment_0.fileName.replace(/\\.xlsx$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) }}-result.xlsx",
         "options": {}
       },
       "id": "c1b2c3d4-0003-4000-8000-000000000003",

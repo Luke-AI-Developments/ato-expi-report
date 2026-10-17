@@ -227,6 +227,9 @@ and **Download Attachments** on, so the attachment arrives on the
 xlsx puts the result on binary `data`, which production's Reply node
 attaches and the test's "Write result file" writes to
 `C:/Users/luket/.n8n-files/ato-expiry-automation/<attachment name>-result.xlsx`.
+The attachment name comes from the email's sender, so it is reduced to
+letters, digits, `_` and `-` (max 64 characters) before it is used in
+the path; a name like `../x.xlsx` cannot leave the folder.
 
 That folder is used because n8n 2.x only lets file nodes write inside
 `~/.n8n-files` by default (`N8N_RESTRICT_FILE_ACCESS_TO`), and the write
