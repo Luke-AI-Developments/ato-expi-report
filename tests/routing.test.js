@@ -180,9 +180,9 @@ test('result rows: rows covered by finished stock are dropped, the rest keep ord
     { sku: '30099999999', description: 'e', qty: 1 },
   ];
   assert.deepEqual(plain(buildResultRows(rows, index, SAMPLE_RULES)), [
-    { sku: '30033333333', description: 'c', qty: 25, actions: '25 to Edge and drill' },
-    { sku: '30044444444', description: 'd', qty: 7, actions: '7 to Drill' },
-    { sku: '30099999999', description: 'e', qty: 1, actions: 'SKU NOT FOUND' }, // no qty in front
+    { sku: '30033333333', description: 'c', actions: '25 to Edge and drill' },
+    { sku: '30044444444', description: 'd', actions: '7 to Drill' },
+    { sku: '30099999999', description: 'e', actions: 'SKU NOT FOUND' }, // no qty in front
   ]);
 });
 

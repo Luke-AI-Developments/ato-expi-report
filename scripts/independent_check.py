@@ -73,26 +73,29 @@ def main():
     for sku, _desc, qty, step in steps:
         if step == RULES[0][1]:
             print(f"{sku}  dropped: finished stock covers qty {qty}")
-    expected = [(sku, desc, qty, step if step == NOT_FOUND else f"{qty} to {step}")
+    expected = [(sku, desc, step if step == NOT_FOUND else f"{qty} to {step}")
                 for sku, desc, qty, step in steps if step != RULES[0][1]]
 
     if "--write" in sys.argv:
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Results"
-        ws.append(["sku", "description", "qty", "actions"])
+        ws.append(["sku", "description", "actions"])
         for r in expected:
             ws.append(list(r))
         wb.save(out_path)
         print(f"wrote {out_path} ({len(expected)} rows)")
         return
 
-    actual = list(openpyxl.load_workbook(out_path).active.iter_rows(values_only=True))[1:]
+    header, *actual = openpyxl.load_workbook(out_path).active.iter_rows(values_only=True)
     bad = 0
+    if tuple(header) != ("sku", "description", "actions"):
+        bad += 1
+        print(f"header is {header!r}, expected ('sku', 'description', 'actions')")
     for exp, act in zip(expected, actual):
         ok = tuple(act) == exp
         bad += not ok
-        print(f"{exp[0]}  {exp[3]:28}  {'OK' if ok else f'MISMATCH (file says {act[3]!r})'}")
+        print(f"{exp[0]}  {exp[2]:28}  {'OK' if ok else f'MISMATCH (file says {act[2]!r})'}")
     if len(expected) != len(actual):
         bad += 1
         print(f"row count differs: input {len(expected)}, expected-output {len(actual)}")

@@ -21,9 +21,10 @@ exists:
 
 This workflow reads the report, looks each SKU up against the "stock
 database", applies that rule, and emails the sender back a new
-spreadsheet with an `actions` column filled in: the row's `qty` and its
-next step, e.g. `20 to Edge and drill`. Rows already covered by finished
-stock are dropped before it is sent.
+spreadsheet with columns `sku`, `description` and `actions`. The
+`actions` cell holds the row's `qty` and its next step, e.g.
+`20 to Edge and drill`, so there is no separate `qty` column. Rows
+already covered by finished stock are dropped before it is sent.
 
 ## Flow
 
