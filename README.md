@@ -5,6 +5,24 @@ A portfolio n8n workflow. **Everything in this repo is fake data** — the
 numbers, the sample SKUs are made up, and nothing here talks to a real
 company system.
 
+## The task it replaces
+
+Part of my job is updating the progress of the products that need
+completing that day. That meant looking each product up in our stock
+database, where every stock record carries a location marker showing
+what still has to happen to complete the product, then compiling the
+results into a report and emailing it to all the relevant stakeholders.
+
+This workflow does that whole job: it looks each product up against the
+database, works out what is still needed from where the stock is, then
+compiles the report and emails it out. **It saves me roughly 45 minutes
+a day.**
+
+In this repo the location marker is the 3-digit prefix on each stock
+code (300 finished, 310 edged and needing drilling, 400 needing edging
+and drilling), and the report goes back as a reply to the email that
+sent the product list.
+
 ## Problem
 
 An ATO ("about to obsolete" / expiry) report lands by email as an `.xlsx`
