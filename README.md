@@ -51,9 +51,18 @@ flowchart TD
 | 4 | Read xlsx attachment | `extractFromFile` |
 | 5 | Look up stock | `postgres` (sticky note: *swap the credential for the real stock DB*) |
 | 6 | Read routing rules | `postgres` (`executeOnce`: the table is small and fixed) |
-| 7 | Decide next step | `code` — the one pure-function node |
-| 8 | Build xlsx | `convertToFile` |
+| 7 | Decide next step | `code` — the routing logic, as pure functions |
+| 8 | Build xlsx | `code` — writes the .xlsx: borders on every cell, columns sized to fit |
 | 9 | Reply with results | `gmail` |
+
+"Build xlsx" writes the workbook itself instead of using n8n's Convert
+to File node, which can't set column widths or borders. The Code node
+can't load an xlsx library without changing n8n's settings, so
+`buildXlsx()` writes the few XML files an .xlsx contains and zips them
+(uncompressed) with plain JavaScript. It is tested by
+`tests/xlsx.test.js`, and `scripts/independent_check.py` checks the
+layout of any result file (thin border on every cell, every column at
+least as wide as its longest value).
 
 The reply goes back on the original email's thread with
 `ato-expiry-results.xlsx` attached. That reply has the same subject and

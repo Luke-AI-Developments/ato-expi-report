@@ -1,9 +1,12 @@
 """Independent check of the sample expected-output files.
 
 Works out each row's next step (and so its `actions` cell, e.g.
-"20 to Edge and drill", or that the row is dropped) straight from db/data/stock-sheet.csv and
-db/data/routing.csv. Deliberately does NOT import or run anything from the
-workflow JSON, so the samples aren't checked against the code under test.
+"20 to Edge and drill", or that the row is dropped) straight from
+db/data/stock-sheet.csv and db/data/routing.csv. Deliberately does NOT
+import or run anything from the workflow JSON, so the samples aren't
+checked against the code under test. Also checks the layout: every used
+cell has a thin border on all four sides and every column is at least as
+wide as its longest value.
 
 Usage (from repo root, needs `pip install openpyxl`):
   python scripts/independent_check.py sample/input.xlsx sample/expected-output.xlsx
@@ -16,6 +19,8 @@ import sys
 from pathlib import Path
 
 import openpyxl
+from openpyxl.styles import Border, Side
+from openpyxl.utils import get_column_letter
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -83,12 +88,32 @@ def main():
         ws.append(["sku", "description", "actions"])
         for r in expected:
             ws.append(list(r))
+        thin = Side(style="thin")
+        for row in ws.iter_rows():
+            for c in row:
+                c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for col in range(1, ws.max_column + 1):
+            longest = max(len(str(ws.cell(r, col).value or "")) for r in range(1, ws.max_row + 1))
+            ws.column_dimensions[get_column_letter(col)].width = longest + 2
         wb.save(out_path)
         print(f"wrote {out_path} ({len(expected)} rows)")
         return
 
-    header, *actual = openpyxl.load_workbook(out_path).active.iter_rows(values_only=True)
+    ws = openpyxl.load_workbook(out_path).active
+    header, *actual = ws.iter_rows(values_only=True)
     bad = 0
+    sides = lambda c: tuple(getattr(c.border, s).style for s in ("left", "right", "top", "bottom"))
+    unbordered = [c.coordinate for row in ws.iter_rows() for c in row if sides(c) != ("thin",) * 4]
+    if unbordered:
+        bad += 1
+        print(f"cells without a thin border on all 4 sides: {', '.join(unbordered)}")
+    for col in range(1, ws.max_column + 1):
+        letter = get_column_letter(col)
+        longest = max(len(str(ws.cell(r, col).value or "")) for r in range(1, ws.max_row + 1))
+        width = ws.column_dimensions[letter].width
+        if width is None or width < longest:
+            bad += 1
+            print(f"column {letter} width {width} is narrower than its longest value ({longest})")
     if tuple(header) != ("sku", "description", "actions"):
         bad += 1
         print(f"header is {header!r}, expected ('sku', 'description', 'actions')")
