@@ -13,7 +13,7 @@
         "simple": false,
         "filters": {
           "includeSpamTrash": false,
-          "q": "subject:\"ato expi\" has:attachment"
+          "q": "subject:\"ato expi\" has:attachment -filename:ato-expiry-results.xlsx"
         },
         "options": {
           "downloadAttachments": true
@@ -52,6 +52,15 @@
                 "type": "string",
                 "operation": "regex"
               }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $binary.attachment_0?.fileName ?? '' }}",
+              "rightValue": "ato-expiry-results.xlsx",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
             }
           ],
           "combinator": "and"
@@ -66,7 +75,7 @@
         -720,
         272
       ],
-      "notes": "Defensive re-check: Gmail's search query (`q`) is fuzzy/stemmed, not a true regex, so we re-test the real subject with /ato expi/i before doing any work."
+      "notes": "Defensive re-check: Gmail's search query (`q`) is fuzzy/stemmed, not a true regex, so we re-test the real subject with /ato expi/i before doing any work. Also skips the workflow's own reply (attachment ato-expiry-results.xlsx), which matches the subject too and would otherwise be processed as a new report."
     },
     {
       "parameters": {
@@ -182,7 +191,7 @@
     {
       "parameters": {
         "operation": "reply",
-        "messageId": "={{ $('ATO Expiry Email').item.json.id }}",
+        "messageId": "={{ $('ATO Expiry Email').first().json.id }}",
         "message": "Updated ATO expiry routing attached. This is an automated reply from the ato-expiry-automation workflow (demo data only).",
         "options": {
           "attachmentsUi": {
@@ -200,7 +209,13 @@
         960,
         272
       ],
-      "webhookId": "26a201d4-0a5f-4254-9816-3372576326f8"
+      "webhookId": "26a201d4-0a5f-4254-9816-3372576326f8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
     },
     {
       "parameters": {

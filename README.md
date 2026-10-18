@@ -55,6 +55,15 @@ flowchart TD
 | 8 | Build xlsx | `convertToFile` |
 | 9 | Reply with results | `gmail` |
 
+The reply goes back on the original email's thread with
+`ato-expiry-results.xlsx` attached. That reply has the same subject and
+an attachment, so it would match the trigger too (when you email
+yourself it also lands in your inbox). To stop the workflow processing
+its own reply, and replying again every minute, the trigger query has
+`-filename:ato-expiry-results.xlsx` and "Subject really matches?" also
+requires the attachment not to be named `ato-expiry-results.xlsx`.
+Gmail's search is fuzzy, so the IF check is the one to rely on.
+
 A second workflow, `workflows/ato-expiry-error-handler.json`, is wired in
 as the main workflow's **Error Workflow** and sends a failure alert email
 instead of letting a failed run disappear silently.
@@ -247,8 +256,9 @@ Gmail Trigger -> Subject really matches? -> Already processed? (Message-ID)
   -> Decide next step -> Build xlsx -> Write result file
 ```
 
-Every node except the last is configured like production: the trigger
-uses the same query (`subject:"ato expi" has:attachment`), `simple: false`
+Every node except the last is configured like production, apart from
+production's own-reply guard (above): the trigger uses the query
+`subject:"ato expi" has:attachment`, `simple: false`
 and **Download Attachments** on, so the attachment arrives on the
 `attachment_0` binary property that "Read xlsx attachment" reads. Build
 xlsx puts the result on binary `data`, which production's Reply node
