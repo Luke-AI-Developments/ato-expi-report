@@ -1,4 +1,4 @@
-# ato-expiry-automation
+# ATO expi report
 
 A portfolio n8n workflow. **Everything in this repo is fake data** — the
 "stock database" is a local-only Postgres container seeded from invented
