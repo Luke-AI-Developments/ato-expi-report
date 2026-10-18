@@ -137,7 +137,6 @@ test('check order from the rules sheet is honoured even when reordered', () => {
 test('actions cell: "<qty> to <next step>" for every outcome, step text unchanged', () => {
   assert.equal(formatAction(20, 'Edge and drill'), '20 to Edge and drill');
   assert.equal(formatAction(25, 'Finished, no action'), '25 to Finished, no action');
-  assert.equal(formatAction(1, 'SKU NOT FOUND'), '1 to SKU NOT FOUND');
   assert.equal(formatAction('7', 'Drill'), '7 to Drill');
 });
 
@@ -183,7 +182,7 @@ test('result rows: rows covered by finished stock are dropped, the rest keep ord
   assert.deepEqual(plain(buildResultRows(rows, index, SAMPLE_RULES)), [
     { sku: '30033333333', description: 'c', qty: 25, actions: '25 to Edge and drill' },
     { sku: '30044444444', description: 'd', qty: 7, actions: '7 to Drill' },
-    { sku: '30099999999', description: 'e', qty: 1, actions: '1 to SKU NOT FOUND' },
+    { sku: '30099999999', description: 'e', qty: 1, actions: 'SKU NOT FOUND' }, // no qty in front
   ]);
 });
 

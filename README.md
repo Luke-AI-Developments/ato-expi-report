@@ -81,8 +81,9 @@ instead, and processing continues with the remaining rows.
 
 Each output row's `actions` cell is `<qty> to <next step>`, with the
 email's `qty` and the step text exactly as in the table:
-`58 to Edge and drill`, `1 to SKU NOT FOUND`. A blank `qty` leaves just
-the step. If every row is dropped, the Code node outputs no items, so
+`58 to Edge and drill`. `SKU NOT FOUND` rows show just that, with no qty
+in front. A blank `qty` leaves just the step. If every row is dropped,
+the Code node outputs no items, so
 n8n stops there and **no reply is sent** for that email.
 
 The decision logic lives in one place: the `jsCode` of the "Decide next

@@ -73,7 +73,8 @@ def main():
     for sku, _desc, qty, step in steps:
         if step == RULES[0][1]:
             print(f"{sku}  dropped: finished stock covers qty {qty}")
-    expected = [(sku, desc, qty, f"{qty} to {step}") for sku, desc, qty, step in steps if step != RULES[0][1]]
+    expected = [(sku, desc, qty, step if step == NOT_FOUND else f"{qty} to {step}")
+                for sku, desc, qty, step in steps if step != RULES[0][1]]
 
     if "--write" in sys.argv:
         wb = openpyxl.Workbook()
