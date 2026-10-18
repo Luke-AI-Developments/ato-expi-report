@@ -36,17 +36,19 @@ function loadDecideNextStep() {
   // just without the plumbing that only makes sense inside n8n itself.
   const pureLogic = jsCode.split(GLUE_MARKER)[0];
   const sandbox = { module: { exports: {} }, console };
-  const harness = `${pureLogic}\nmodule.exports = { decideNextStep, buildStockIndex, formatAction, buildResultRows };`;
+  const harness = `${pureLogic}\nmodule.exports = { decideNextStep, buildStockIndex, formatAction, buildResultRows, splitRowsByEmail };`;
   vm.runInNewContext(harness, sandbox, { filename: 'decideNextStep.sandbox.js' });
 
   assert.equal(typeof sandbox.module.exports.decideNextStep, 'function');
   assert.equal(typeof sandbox.module.exports.buildStockIndex, 'function');
   assert.equal(typeof sandbox.module.exports.formatAction, 'function');
   assert.equal(typeof sandbox.module.exports.buildResultRows, 'function');
+  assert.equal(typeof sandbox.module.exports.splitRowsByEmail, 'function');
   return sandbox.module.exports;
 }
 
-const { decideNextStep, buildStockIndex, formatAction, buildResultRows } = loadDecideNextStep();
+const { decideNextStep, buildStockIndex, formatAction, buildResultRows, splitRowsByEmail } =
+  loadDecideNextStep();
 
 const SAMPLE_RULES = [
   { prefix: '300', stage: 'Finished good', nextStep: 'Finished, no action', checkOrder: 1 },
@@ -189,4 +191,28 @@ test('result rows: rows covered by finished stock are dropped, the rest keep ord
 test('result rows: every row covered -> empty result', () => {
   const index = buildStockIndex([{ sku: FG_SKU, qty: 5 }]);
   assert.deepEqual(plain(buildResultRows([{ sku: FG_SKU, qty: 5 }], index, SAMPLE_RULES)), []);
+});
+test('rows are split by the email they came from (pairedItem.item)', () => {
+  const rowItems = [
+    { json: { sku: 'a1' }, pairedItem: { item: 0 } },
+    { json: { sku: 'b1' }, pairedItem: { item: 1 } },
+    { json: { sku: 'a2' }, pairedItem: [{ item: 0 }] },
+    { json: { sku: 'b2' }, pairedItem: { item: 1, input: 0 } },
+  ];
+  assert.deepEqual(plain(splitRowsByEmail(rowItems, 2)), [
+    [{ sku: 'a1' }, { sku: 'a2' }],
+    [{ sku: 'b1' }, { sku: 'b2' }],
+  ]);
+});
+
+test('an email with no rows gets an empty list', () => {
+  const rowItems = [{ json: { sku: 'b1' }, pairedItem: { item: 1 } }];
+  assert.deepEqual(plain(splitRowsByEmail(rowItems, 2)), [[], [{ sku: 'b1' }]]);
+});
+
+test('missing email link: fine with one email, refuses to guess with several', () => {
+  const rowItems = [{ json: { sku: 'x' } }];
+  assert.deepEqual(plain(splitRowsByEmail(rowItems, 1)), [[{ sku: 'x' }]]);
+  assert.throws(() => splitRowsByEmail(rowItems, 2), /refusing to mix senders/);
+  assert.throws(() => splitRowsByEmail([{ json: {}, pairedItem: { item: 5 } }], 2), /refusing to mix senders/);
 });

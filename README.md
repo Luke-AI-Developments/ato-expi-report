@@ -64,6 +64,15 @@ can't load an xlsx library without changing n8n's settings, so
 layout of any result file (thin border on every cell, every column at
 least as wide as its longest value).
 
+**One reply per email.** A poll can pick up several emails at once.
+"Decide next step" splits the spreadsheet rows by the email they came
+from (n8n links each row back to its email) and outputs one item per
+email: its message id and only its own rows. "Build xlsx" makes one
+file per item and "Reply with results" answers each email by its own
+`messageId`, so one sender's rows never reach another sender. If that
+link were ever missing with more than one email in the run, the node
+stops with an error rather than guess.
+
 The reply goes back on the original email's thread with
 `ato-expiry-results.xlsx` attached. That reply has the same subject and
 an attachment, so it would match the trigger too (when you email
@@ -107,9 +116,9 @@ n8n stops there and **no reply is sent** for that email.
 
 The decision logic lives in one place: the `jsCode` of the "Decide next
 step" node in `workflows/ato-expiry-automation.json`, as the pure
-functions `decideNextStep()`, `buildStockIndex()`, `formatAction()` and
-`buildResultRows()`. Nothing about which
-prefix maps to which step, or which order to check them in, is hardcoded
+functions `decideNextStep()`, `buildStockIndex()`, `formatAction()`,
+`buildResultRows()` and `splitRowsByEmail()`. Nothing about which prefix
+maps to which step, or which order to check them in, is hardcoded
 beyond the *shape* of a rule row (`prefix`, `nextStep`, `checkOrder`) —
 that mapping and order both come from the `routing` table.
 
